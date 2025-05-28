@@ -442,8 +442,8 @@ const TakeAttendance = () => {
                   <div className="space-y-2">
                     {recognizedStudents.map((student, index) => (
                       <div key={student.id} className="flex items-center space-x-2 p-2 bg-green-50 rounded border">
-                        <CheckCircle className="w-4 h-4 text-green-600" />
-                        <div className="flex-1">
+                          <CheckCircle className="w-4 h-4 text-green-600" />
+                          <div className="flex-1">
                           <div className="font-medium text-sm">{student.name}</div>
                         </div>
                       </div>

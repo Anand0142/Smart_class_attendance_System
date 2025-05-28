@@ -140,7 +140,7 @@ const Index = () => {
         <div className="text-center">
           <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
           <p className="mt-4 text-gray-600">Loading...</p>
-        </div>
+            </div>
       </div>
     );
   }
@@ -162,7 +162,7 @@ const Index = () => {
                 <p className="text-sm text-gray-600">Teacher Dashboard</p>
               </div>
             </div>
-            <Button
+            <Button 
               variant="outline" 
               onClick={handleLogout}
               className="border-gray-300 hover:bg-gray-50"
@@ -271,18 +271,18 @@ const Index = () => {
         {/* Update Summary Statistics section */}
         <div className="mt-16 flex justify-center">
           <div className="grid md:grid-cols-2 gap-6 max-w-2xl">
-            <div className="bg-white/80 backdrop-blur-sm rounded-lg p-6 text-center border border-gray-100">
+          <div className="bg-white/80 backdrop-blur-sm rounded-lg p-6 text-center border border-gray-100">
               <div className="text-2xl font-bold text-blue-600 mb-2">
                 {summaryStats.totalStudents}
               </div>
-              <div className="text-sm text-gray-600">Registered Students</div>
-            </div>
-            <div className="bg-white/80 backdrop-blur-sm rounded-lg p-6 text-center border border-gray-100">
+            <div className="text-sm text-gray-600">Registered Students</div>
+          </div>
+          <div className="bg-white/80 backdrop-blur-sm rounded-lg p-6 text-center border border-gray-100">
               <div className="text-2xl font-bold text-green-600 mb-2">
                 {summaryStats.activeSubjects}
               </div>
-              <div className="text-sm text-gray-600">Active Subjects</div>
-            </div>
+            <div className="text-sm text-gray-600">Active Subjects</div>
+          </div>
           </div>
         </div>
       </main>

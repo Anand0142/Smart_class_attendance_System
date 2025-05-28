@@ -4,57 +4,100 @@ import numpy as np
 import face_recognition
 import json
 import urllib.request
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import tempfile
 import subprocess
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Root route
+@app.route('/')
+def home():
+    return jsonify({
+        "status": "Server is running",
+        "endpoints": {
+            "test": "/test",
+            "extract_features": "/extract-features"
+        }
+    })
+
+# Test route
+@app.route('/test', methods=['GET'])
+def test():
+    return jsonify({"status": "Server is running"})
+
+# Error handlers
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({
+        "error": "Not Found",
+        "message": "The requested URL was not found on the server",
+        "status_code": 404
+    }), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({
+        "error": "Internal Server Error",
+        "message": "An internal server error occurred",
+        "status_code": 500
+    }), 500
 
 def download_models():
-    # Create models directory if it doesn't exist
-    if not os.path.exists('models'):
-        os.makedirs('models')
+    try:
+        # Create models directory if it doesn't exist
+        if not os.path.exists('models'):
+            os.makedirs('models')
+            logger.info("Created models directory")
 
-    # List of model files to download
-    model_files = [
-        'tiny_face_detector_model-weights_manifest.json',
-        'tiny_face_detector_model-shard1',
-        'face_landmark_68_model-weights_manifest.json',
-        'face_landmark_68_model-shard1',
-        'face_recognition_model-weights_manifest.json',
-        'face_recognition_model-shard1',
-        'face_recognition_model-shard2',
-        'face_expression_model-weights_manifest.json',
-        'face_expression_model-shard1'
-    ]
+        # List of model files to download
+        model_files = [
+            'tiny_face_detector_model-weights_manifest.json',
+            'tiny_face_detector_model-shard1',
+            'face_landmark_68_model-weights_manifest.json',
+            'face_landmark_68_model-shard1',
+            'face_recognition_model-weights_manifest.json',
+            'face_recognition_model-shard1',
+            'face_recognition_model-shard2',
+            'face_expression_model-weights_manifest.json',
+            'face_expression_model-shard1'
+        ]
 
-    # Base URL for the models
-    base_url = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights/'
+        # Base URL for the models
+        base_url = 'https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights/'
 
-    # Download each model file
-    for file in model_files:
-        url = base_url + file
-        save_path = os.path.join('models', file)
-        print(f'Downloading {file}...')
+        # Download each model file
+        for file in model_files:
+            url = base_url + file
+            save_path = os.path.join('models', file)
+            logger.info(f'Downloading {file}...')
+            try:
+                urllib.request.urlretrieve(url, save_path)
+                logger.info(f'Successfully downloaded {file}')
+            except Exception as e:
+                logger.error(f'Error downloading {file}: {str(e)}')
+                return False
+
+        # Copy models to React public directory
         try:
-            urllib.request.urlretrieve(url, save_path)
-            print(f'Successfully downloaded {file}')
+            logger.info("Copying models to React public directory...")
+            subprocess.run(['python', 'copy-models.py'], check=True)
+            logger.info("Successfully copied models to React public directory")
         except Exception as e:
-            print(f'Error downloading {file}: {str(e)}')
+            logger.error(f"Error copying models: {str(e)}")
             return False
 
-    # Copy models to React public directory
-    try:
-        print("Copying models to React public directory...")
-        subprocess.run(['python', 'copy-models.py'], check=True)
-        print("Successfully copied models to React public directory")
+        return True
     except Exception as e:
-        print(f"Error copying models: {str(e)}")
+        logger.error(f"Error in download_models: {str(e)}")
         return False
-
-    return True
 
 def extract_face_features(image_file):
     try:
@@ -98,13 +141,19 @@ def extract_face_features(image_file):
             "face_landmarks": face_landmark
         }
     except Exception as e:
-        print(f"Error extracting features: {str(e)}")
+        logger.error(f"Error extracting features: {str(e)}")
         if 'temp_path' in locals():
             os.unlink(temp_path)  # Clean up temp file in case of error
         return None
 
-@app.route('/extract-features', methods=['POST'])
+@app.route('/extract-features', methods=['GET', 'POST'])
 def process_images():
+    if request.method == 'GET':
+        return jsonify({
+            "message": "This endpoint accepts POST requests with image files",
+            "required_fields": ["image1", "image2"]
+        })
+    
     try:
         # Get image files from request
         if 'image1' not in request.files or 'image2' not in request.files:
@@ -134,13 +183,22 @@ def process_images():
         })
         
     except Exception as e:
-        print(f"Error processing images: {str(e)}")
+        logger.error(f"Error processing images: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    # Download models first
-    if download_models():
-        print("Models downloaded successfully")
-        app.run(port=5000)
-    else:
-        print("Failed to download models") 
+    try:
+        # Download models first
+        if download_models():
+            logger.info("Models downloaded successfully")
+            logger.info("Server starting on http://localhost:5000")
+            logger.info("Available endpoints:")
+            logger.info("- GET /")
+            logger.info("- GET /test")
+            logger.info("- POST /extract-features")
+            # Disable debug mode to prevent multiple instances
+            app.run(host='0.0.0.0', port=5000, debug=False)
+        else:
+            logger.error("Failed to download models")
+    except Exception as e:
+        logger.error(f"Server startup error: {str(e)}") 
