@@ -9,13 +9,25 @@ from flask_cors import CORS
 import tempfile
 import subprocess
 import logging
+import base64
+from datetime import datetime
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('face_recognition.log'),
+        logging.StreamHandler()
+    ]
+)
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Create directories if they don't exist
+os.makedirs('face_encodings', exist_ok=True)
+os.makedirs('student_images', exist_ok=True)
 
 # Root route
 @app.route('/')
@@ -55,7 +67,7 @@ def download_models():
         # Create models directory if it doesn't exist
         if not os.path.exists('models'):
             os.makedirs('models')
-            logger.info("Created models directory")
+            logging.info("Created models directory")
 
         # List of model files to download
         model_files = [
@@ -77,26 +89,26 @@ def download_models():
         for file in model_files:
             url = base_url + file
             save_path = os.path.join('models', file)
-            logger.info(f'Downloading {file}...')
+            logging.info(f'Downloading {file}...')
             try:
                 urllib.request.urlretrieve(url, save_path)
-                logger.info(f'Successfully downloaded {file}')
+                logging.info(f'Successfully downloaded {file}')
             except Exception as e:
-                logger.error(f'Error downloading {file}: {str(e)}')
+                logging.error(f'Error downloading {file}: {str(e)}')
                 return False
 
         # Copy models to React public directory
         try:
-            logger.info("Copying models to React public directory...")
+            logging.info("Copying models to React public directory...")
             subprocess.run(['python', 'copy-models.py'], check=True)
-            logger.info("Successfully copied models to React public directory")
+            logging.info("Successfully copied models to React public directory")
         except Exception as e:
-            logger.error(f"Error copying models: {str(e)}")
+            logging.error(f"Error copying models: {str(e)}")
             return False
 
         return True
     except Exception as e:
-        logger.error(f"Error in download_models: {str(e)}")
+        logging.error(f"Error in download_models: {str(e)}")
         return False
 
 def extract_face_features(image_file):
@@ -141,13 +153,13 @@ def extract_face_features(image_file):
             "face_landmarks": face_landmark
         }
     except Exception as e:
-        logger.error(f"Error extracting features: {str(e)}")
+        logging.error(f"Error extracting features: {str(e)}")
         if 'temp_path' in locals():
             os.unlink(temp_path)  # Clean up temp file in case of error
         return None
 
 @app.route('/extract-features', methods=['GET', 'POST'])
-def process_images():
+def extract_features():
     if request.method == 'GET':
         return jsonify({
             "message": "This endpoint accepts POST requests with image files",
@@ -183,22 +195,131 @@ def process_images():
         })
         
     except Exception as e:
-        logger.error(f"Error processing images: {str(e)}")
+        logging.error(f"Error processing images: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
+def save_face_encoding(student_id, face_encoding):
+    """Save face encoding to a file"""
+    try:
+        np.save(f'face_encodings/{student_id}.npy', face_encoding)
+        logging.info(f"Saved face encoding for student {student_id}")
+        return True
+    except Exception as e:
+        logging.error(f"Error saving face encoding for student {student_id}: {str(e)}")
+        return False
+
+def save_student_image(student_id, image_data, index):
+    """Save student image to a file"""
+    try:
+        # Decode base64 image
+        image_bytes = base64.b64decode(image_data.split(',')[1])
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        # Save image
+        filename = f'student_images/{student_id}_{index}.jpg'
+        cv2.imwrite(filename, img)
+        logging.info(f"Saved image {index} for student {student_id}")
+        return True
+    except Exception as e:
+        logging.error(f"Error saving image {index} for student {student_id}: {str(e)}")
+        return False
+
+@app.route('/process-images', methods=['POST'])
+def process_images():
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'status': 'error', 'message': 'No data received'}), 400
+
+        # Extract data
+        images = data.get('images', [])
+        student_id = data.get('student_id')
+        name = data.get('name')
+        roll_number = data.get('roll_number')
+        class_name = data.get('class')
+
+        if not all([images, student_id, name, roll_number, class_name]):
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required fields'
+            }), 400
+
+        logging.info(f"Processing registration for student {student_id}")
+
+        # Process each image
+        face_encodings = []
+        for i, image_data in enumerate(images):
+            try:
+                # Decode base64 image
+                image_bytes = base64.b64decode(image_data.split(',')[1])
+                nparr = np.frombuffer(image_bytes, np.uint8)
+                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                
+                # Convert to RGB for face_recognition
+                rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                
+                # Detect faces
+                face_locations = face_recognition.face_locations(rgb_img)
+                if not face_locations:
+                    logging.warning(f"No face detected in image {i} for student {student_id}")
+                    continue
+
+                # Get face encoding
+                face_encoding = face_recognition.face_encodings(rgb_img, face_locations)[0]
+                face_encodings.append(face_encoding)
+                
+                # Save image
+                save_student_image(student_id, image_data, i)
+                
+            except Exception as e:
+                logging.error(f"Error processing image {i} for student {student_id}: {str(e)}")
+                continue
+
+        if not face_encodings:
+            return jsonify({
+                'status': 'error',
+                'message': 'No valid faces detected in any image'
+            }), 400
+
+        # Calculate average face encoding
+        avg_face_encoding = np.mean(face_encodings, axis=0)
+        
+        # Save face encoding
+        if not save_face_encoding(student_id, avg_face_encoding):
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to save face encoding'
+            }), 500
+
+        logging.info(f"Successfully registered student {student_id}")
+        return jsonify({
+            'status': 'success',
+            'message': 'Student registered successfully',
+            'student_id': student_id
+        })
+
+    except Exception as e:
+        logging.error(f"Error in process_images: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Server error: {str(e)}'
+        }), 500
 
 if __name__ == '__main__':
     try:
         # Download models first
         if download_models():
-            logger.info("Models downloaded successfully")
-            logger.info("Server starting on http://localhost:5000")
-            logger.info("Available endpoints:")
-            logger.info("- GET /")
-            logger.info("- GET /test")
-            logger.info("- POST /extract-features")
+            logging.info("Models downloaded successfully")
+            logging.info("Server starting on http://localhost:5000")
+            logging.info("Available endpoints:")
+            logging.info("- GET /")
+            logging.info("- GET /test")
+            logging.info("- POST /extract-features")
+            logging.info("- POST /process-images")
             # Disable debug mode to prevent multiple instances
             app.run(host='0.0.0.0', port=5000, debug=False)
         else:
-            logger.error("Failed to download models")
+            logging.error("Failed to download models")
     except Exception as e:
-        logger.error(f"Server startup error: {str(e)}") 
+        logging.error(f"Server startup error: {str(e)}") 

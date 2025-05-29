@@ -26,6 +26,8 @@ const RegisterStudent = () => {
   const [faceDescriptors, setFaceDescriptors] = useState<number[][]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
+  const [isComponentMounted, setIsComponentMounted] = useState(true);
+  const [faceBox, setFaceBox] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
 
   useEffect(() => {
     const checkSession = async () => {
@@ -38,6 +40,14 @@ const RegisterStudent = () => {
     };
     checkSession();
   }, [navigate]);
+
+  useEffect(() => {
+    setIsComponentMounted(true);
+    return () => {
+      setIsComponentMounted(false);
+      cleanupCamera();
+    };
+  }, []);
 
   // Download face-api.js models
   const downloadModels = async () => {
@@ -101,125 +111,39 @@ const RegisterStudent = () => {
 
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { 
-          width: 640, 
-          height: 480,
-          facingMode: 'user'
+          width: 1280,
+          height: 720,
+          facingMode: "user"
         } 
       });
       
-      if (videoRef.current) {
+      if (videoRef.current && isComponentMounted) {
         videoRef.current.srcObject = stream;
-        await new Promise((resolve) => {
-          if (videoRef.current) {
-            videoRef.current.onloadedmetadata = () => {
-              resolve(true);
-            };
-          }
-        });
         setCameraActive(true);
-
-        // Capture first image after 2 seconds
-        setTimeout(async () => {
-          if (!videoRef.current || !canvasRef.current) return;
-          
-          const canvas = canvasRef.current;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) return;
-
-          canvas.width = videoRef.current.videoWidth;
-          canvas.height = videoRef.current.videoHeight;
-          ctx.drawImage(videoRef.current, 0, 0);
-
-          // Convert canvas to blob
-          const blob = await new Promise<Blob>((resolve) => {
-            canvas.toBlob((blob) => resolve(blob!), 'image/jpeg');
-          });
-
-          // Save first image
-          const image1Path = 'capture_1.jpg';
-          const image1Url = URL.createObjectURL(blob);
-          const image1Response = await fetch(image1Url);
-          const image1Blob = await image1Response.blob();
-          const image1File = new File([image1Blob], image1Path, { type: 'image/jpeg' });
-
-          // Capture second image after another 2 seconds
-          setTimeout(async () => {
-            if (!videoRef.current || !canvasRef.current) return;
-            
-            ctx.drawImage(videoRef.current, 0, 0);
-            
-            // Convert canvas to blob
-            const blob2 = await new Promise<Blob>((resolve) => {
-              canvas.toBlob((blob) => resolve(blob!), 'image/jpeg');
-            });
-
-            // Save second image
-            const image2Path = 'capture_2.jpg';
-            const image2Url = URL.createObjectURL(blob2);
-            const image2Response = await fetch(image2Url);
-            const image2Blob = await image2Response.blob();
-            const image2File = new File([image2Blob], image2Path, { type: 'image/jpeg' });
-
-            // Create FormData and append images
-            const formData = new FormData();
-            formData.append('image1', image1File);
-            formData.append('image2', image2File);
-
-            try {
-              // Send images to Python backend
-              const response = await fetch('http://localhost:5000/extract-features', {
-                method: 'POST',
-                body: formData
-              });
-
-              if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-              }
-
-              const data = await response.json();
-              console.log('Face Features:', data);
-
-              if (data.error) {
-                throw new Error(data.error);
-              }
-
-              // Display features in console
-              console.log('Image 1 Features:', data.image1_features);
-              console.log('Image 2 Features:', data.image2_features);
-              console.log('Face Distance:', data.face_distance);
-
-              // Store face descriptors for registration
-              if (data.image1_features && data.image2_features) {
-                setFaceDescriptors([
-                  data.image1_features.face_encoding,
-                  data.image2_features.face_encoding
-                ]);
-              }
-
-              // Stop video stream
-              stream.getTracks().forEach(track => track.stop());
-              videoRef.current.srcObject = null;
-              setCameraActive(false);
-
-            } catch (error) {
-              console.error('Error sending images to Python backend:', error);
-              toast.error('Failed to process face features: ' + (error instanceof Error ? error.message : 'Unknown error'));
-            }
-          }, 2000);
-        }, 2000);
+      } else {
+        // If component is unmounted or ref is not available, stop the stream
+        stream.getTracks().forEach(track => track.stop());
       }
     } catch (error) {
-      console.error('Camera error:', error);
-      toast.error("Failed to access camera. Please check permissions.");
+      console.error('Error starting camera:', error);
+      toast.error('Failed to start camera. Please check camera permissions.');
     }
   };
 
-  const stopCamera = () => {
+  const cleanupCamera = () => {
     if (videoRef.current && videoRef.current.srcObject) {
-      const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-      tracks.forEach(track => track.stop());
-      setCameraActive(false);
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(track => {
+        track.stop();
+        console.log('Camera track stopped:', track.label);
+      });
+      videoRef.current.srcObject = null;
     }
+    setCameraActive(false);
+  };
+
+  const stopCamera = () => {
+    cleanupCamera();
   };
 
   const captureImage = async () => {
@@ -286,7 +210,7 @@ const RegisterStudent = () => {
       
       if (captureNumber >= 2) {
         console.log('Both captures completed. Face descriptors:', faceDescriptors);
-        stopCamera();
+        cleanupCamera();
       }
     } catch (error) {
       console.error('Error capturing image:', error);
@@ -307,6 +231,8 @@ const RegisterStudent = () => {
 
     try {
       setIsRegistering(true);
+      cleanupCamera();
+
       const { error } = await supabase
         .from('students')
         .insert([
@@ -333,6 +259,67 @@ const RegisterStudent = () => {
       setIsRegistering(false);
     }
   };
+
+  // Add this useEffect to load models when component mounts
+  useEffect(() => {
+    const loadModels = async () => {
+      try {
+        setIsLoadingModels(true);
+        const modelsLoaded = await downloadModels();
+        if (!modelsLoaded) {
+          toast.error("Failed to load face recognition models");
+        }
+      } catch (error) {
+        console.error('Error loading models:', error);
+        toast.error('Failed to load face recognition models');
+      } finally {
+        setIsLoadingModels(false);
+      }
+    };
+
+    loadModels();
+  }, []);
+
+  useEffect(() => {
+    let animationFrameId: number;
+
+    const detectFace = async () => {
+      if (cameraActive && videoRef.current && faceapi.nets.tinyFaceDetector.params) {
+        const result = await faceapi.detectSingleFace(
+          videoRef.current,
+          new faceapi.TinyFaceDetectorOptions()
+        );
+        if (result) {
+          const { x, y, width, height } = result.box;
+          setFaceBox({ x, y, width, height });
+        } else {
+          setFaceBox(null);
+        }
+      }
+      animationFrameId = requestAnimationFrame(detectFace);
+    };
+
+    if (cameraActive) {
+      detectFace();
+    } else {
+      setFaceBox(null);
+    }
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [cameraActive]);
+
+  function getRelativeBox(box, video) {
+    const scaleX = video.offsetWidth / video.videoWidth;
+    const scaleY = video.offsetHeight / video.videoHeight;
+    return {
+      left: box.x * scaleX,
+      top: box.y * scaleY,
+      width: box.width * scaleX,
+      height: box.height * scaleY,
+    };
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50">
@@ -441,6 +428,26 @@ const RegisterStudent = () => {
                     </div>
                   </div>
                 )}
+
+                {cameraActive && faceBox && videoRef.current && (
+                  (() => {
+                    const rel = getRelativeBox(faceBox, videoRef.current);
+                    return (
+                      <div
+                        className="absolute border-4 border-green-500 rounded-lg pointer-events-none"
+                        style={{
+                          left: `${rel.left}px`,
+                          top: `${rel.top}px`,
+                          width: `${rel.width}px`,
+                          height: `${rel.height}px`,
+                          boxSizing: 'border-box',
+                          transition: 'all 0.1s linear',
+                          zIndex: 10,
+                        }}
+                      />
+                    );
+                  })()
+                )}
               </div>
 
               <div className="flex space-x-2">
@@ -468,6 +475,17 @@ const RegisterStudent = () => {
                   </Button>
                 )}
               </div>
+
+              {/* Show loading state */}
+              {isLoadingModels && (
+                <div className="text-center text-sm text-gray-600 mt-2">
+                  <div className="flex items-center justify-center space-x-2">
+                    <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                    <span>Loading face recognition models...</span>
+                  </div>
+                  <p className="mt-1">This may take a few moments</p>
+                </div>
+              )}
 
               {/* Captured Images Preview */}
               {capturedImages.length > 0 && (

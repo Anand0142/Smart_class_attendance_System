@@ -85,7 +85,7 @@ const ViewAttendance = () => {
         // 3. Get all attendance records for this subject
         const { data: attendance, error: attendanceError } = await supabase
           .from('attendance')
-          .select('student_id, date')
+          .select('student_id, date, status')
           .eq('subject_id', subjectId);
         if (attendanceError) {
           toast.error('Error fetching attendance');
@@ -93,16 +93,21 @@ const ViewAttendance = () => {
           return;
         }
 
-        // 4. Calculate stats for each student
+        // 4. Calculate total classes (unique dates)
+        const uniqueDates = Array.from(new Set(attendance.map(a => a.date)));
+        const totalClasses = uniqueDates.length;
+
+        // 5. Calculate stats for each student
         const studentAttendance = students.map(student => {
-          const records = attendance.filter(a => a.student_id === student.id);
-          const total = records.length;
-          const present = records.length; // Since each record represents a present attendance
-          const percentage = total > 0 ? (present / total) * 100 : 0;
+          const studentRecords = attendance.filter(a => a.student_id === student.id);
+          const present = studentRecords.filter(a => a.status === 'present').length;
+          const absent = studentRecords.filter(a => a.status === 'absent').length;
+          const percentage = totalClasses > 0 ? (present / totalClasses) * 100 : 0;
           return {
             ...student,
             present,
-            total,
+            absent,
+            total: totalClasses,
             percentage,
           };
         });
@@ -250,7 +255,8 @@ const ViewAttendance = () => {
                     <TableHead>Roll No</TableHead>
                     <TableHead>Student Name</TableHead>
                     <TableHead>Email</TableHead>
-                    <TableHead>Present Days</TableHead>
+                    <TableHead>Present</TableHead>
+                    <TableHead>Absent</TableHead>
                     <TableHead>Total Classes</TableHead>
                     <TableHead>Attendance %</TableHead>
                     <TableHead>Action</TableHead>
@@ -263,6 +269,7 @@ const ViewAttendance = () => {
                       <TableCell>{student.name}</TableCell>
                       <TableCell className="text-sm text-gray-600">{student.email}</TableCell>
                       <TableCell>{student.present}</TableCell>
+                      <TableCell>{student.absent}</TableCell>
                       <TableCell>{student.total}</TableCell>
                       <TableCell>
                         <Badge className={getAttendanceColor(student.percentage)}>
