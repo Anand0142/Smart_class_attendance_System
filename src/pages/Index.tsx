@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { UserPlus, Camera, FileText, GraduationCap, LogOut } from "lucide-react";
@@ -14,9 +14,12 @@ const Index = () => {
     totalStudents: 0,
     activeSubjects: 0
   });
+  const userDataFetched = useRef(false);
 
   useEffect(() => {
     const getUserData = async () => {
+      if (userDataFetched.current) return; // Skip if already fetched
+      
       try {
         setIsLoading(true);
         
@@ -52,6 +55,7 @@ const Index = () => {
 
         if (userData?.name) {
           setUserName(userData.name);
+          userDataFetched.current = true;
         } else {
           console.log("No name found in userData:", userData);
           toast.error("User data not found");
@@ -72,7 +76,7 @@ const Index = () => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
         navigate('/auth', { replace: true });
-      } else if (session?.user?.email) {
+      } else if (session?.user?.email && !userDataFetched.current) {
         const { data: userData } = await supabase
           .from("users")
           .select("name")
@@ -81,6 +85,7 @@ const Index = () => {
         
         if (userData?.name) {
           setUserName(userData.name);
+          userDataFetched.current = true;
         }
       }
     });
@@ -94,24 +99,23 @@ const Index = () => {
         const { data: { user }, error: userError } = await supabase.auth.getUser();
         if (userError || !user) return;
 
-        // 1. Get total students count
-        const { count: studentCount, error: studentError } = await supabase
-          .from('students')
-          .select('*', { count: 'exact', head: true });
-        
-        if (studentError) throw studentError;
+        // Use Promise.all to fetch data in parallel
+        const [studentResult, subjectResult] = await Promise.all([
+          supabase
+            .from('students')
+            .select('*', { count: 'exact', head: true }),
+          supabase
+            .from('subjects')
+            .select('*', { count: 'exact', head: true })
+            .eq('teacher_id', user.id)
+        ]);
 
-        // 2. Get active subjects count
-        const { count: subjectCount, error: subjectError } = await supabase
-          .from('subjects')
-          .select('*', { count: 'exact', head: true })
-          .eq('teacher_id', user.id);
-        
-        if (subjectError) throw subjectError;
+        if (studentResult.error) throw studentResult.error;
+        if (subjectResult.error) throw subjectResult.error;
 
         setSummaryStats({
-          totalStudents: studentCount || 0,
-          activeSubjects: subjectCount || 0
+          totalStudents: studentResult.count || 0,
+          activeSubjects: subjectResult.count || 0
         });
 
       } catch (error) {

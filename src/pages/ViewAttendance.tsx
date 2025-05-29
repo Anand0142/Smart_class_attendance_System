@@ -168,16 +168,24 @@ const ViewAttendance = () => {
   };
 
   const sendWarningEmail = (student: any, subject: string) => {
-    const subjectKey = getSubjectKey(subject);
-    const attendance = student[subjectKey];
-    
-    if (!attendance) {
-      toast.error(`No attendance data found for ${student.name} in ${subject}`);
-      return;
+    // Note: The attendance data is directly attached to the student object.
+    const attendancePercentage = student.percentage;
+
+    // Define the warning message
+    const warningMessage = "Your attendance is below 60%, please attend your classes carefully";
+    const emailSubject = "Attendance Warning";
+
+    // Use mailto: protocol to open the user's email client
+    const emailBody = encodeURIComponent(`${warningMessage}\n\nStudent: ${student.name}\nSubject: ${subject}\nAttendance: ${attendancePercentage.toFixed(1)}%`);
+    const mailtoLink = `mailto:${student.email}?subject=${encodeURIComponent(emailSubject)}&body=${emailBody}`;
+
+    try {
+      window.open(mailtoLink, '_blank');
+      toast.success(`Opened email client to send warning to ${student.name}`);
+    } catch (error) {
+      console.error('Error opening mailto link:', error);
+      toast.error(`Failed to open email client for ${student.name}`);
     }
-    
-    // In real app, this would trigger a Supabase Edge Function
-    toast.success(`Warning email sent to ${student.name} for ${subject} (${attendance.percentage.toFixed(1)}% attendance)`);
   };
 
   const filteredData = selectedSubject === 'all' ? attendanceData : attendanceData;
@@ -266,35 +274,35 @@ const ViewAttendance = () => {
                   {attendanceData.map(student => (
                     <TableRow key={student.id}>
                       <TableCell className="font-medium">{student.roll_no}</TableCell>
-                      <TableCell>{student.name}</TableCell>
-                      <TableCell className="text-sm text-gray-600">{student.email}</TableCell>
+                          <TableCell>{student.name}</TableCell>
+                          <TableCell className="text-sm text-gray-600">{student.email}</TableCell>
                       <TableCell>{student.present}</TableCell>
                       <TableCell>{student.absent}</TableCell>
                       <TableCell>{student.total}</TableCell>
-                      <TableCell>
+                          <TableCell>
                         <Badge className={getAttendanceColor(student.percentage)}>
                           {student.percentage.toFixed(1)}%
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
                         {student.percentage < 75 ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
+                            <Button
+                              size="sm"
+                              variant="outline"
                             onClick={() => sendWarningEmail(student, selectedSubject)}
-                            className="flex items-center space-x-1 text-red-600 border-red-200 hover:bg-red-50"
-                          >
-                            <Mail className="w-3 h-3" />
-                            <AlertTriangle className="w-3 h-3" />
-                            <span className="text-xs">Send Warning</span>
-                          </Button>
-                        ) : (
-                          <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50">
-                            Good Standing
-                          </Badge>
-                        )}
-                      </TableCell>
-                    </TableRow>
+                              className="flex items-center space-x-1 text-red-600 border-red-200 hover:bg-red-50"
+                            >
+                              <Mail className="w-3 h-3" />
+                              <AlertTriangle className="w-3 h-3" />
+                              <span className="text-xs">Send Warning</span>
+                            </Button>
+                          ) : (
+                            <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50">
+                              Good Standing
+                            </Badge>
+                          )}
+                        </TableCell>
+                      </TableRow>
                   ))}
                 </TableBody>
               </Table>

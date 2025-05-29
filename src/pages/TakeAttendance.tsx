@@ -10,12 +10,11 @@ import { Input } from "@/components/ui/input";
 import { supabase } from "@/lib/supabase";
 import * as faceapi from 'face-api.js';
 
-const FACE_MATCH_THRESHOLD = 0.5; // Try lowering this value
+const FACE_MATCH_THRESHOLD = 0.5;
 
 const extractFeaturesWithPython = async (imageBlob: Blob) => {
   const formData = new FormData();
   formData.append('image1', imageBlob);
-  // Dummy second image for compatibility with your Flask endpoint
   formData.append('image2', imageBlob);
 
   const response = await fetch('http://localhost:5000/extract-features', {
@@ -24,7 +23,6 @@ const extractFeaturesWithPython = async (imageBlob: Blob) => {
   });
   const data = await response.json();
   if (data.error) throw new Error(data.error);
-  // Use the first image's features
   return data.image1_features.face_encoding;
 };
 
@@ -39,9 +37,6 @@ const fadeOutAnimation = `
   }
 `;
 
-/**
- * Helper to get the relative position of the face box in the video element
- */
 function getRelativeBox(box: { x: number, y: number, width: number, height: number }, video: HTMLVideoElement) {
   const videoRect = video.getBoundingClientRect();
   const scaleX = video.offsetWidth / video.videoWidth;
@@ -69,14 +64,17 @@ const TakeAttendance = () => {
   const [currentTime, setCurrentTime] = useState(new Date().toLocaleTimeString());
   const [isLoading, setIsLoading] = useState(false);
   const [isModelLoading, setIsModelLoading] = useState(true);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
   const [studentFaceFeatures, setStudentFaceFeatures] = useState<{id: string, name: string, face_descriptor: number[]}[]>([]);
-  const [lastCapturedImage, setLastCapturedImage] = useState<string | null>(null);
-  const [isCapturing, setIsCapturing] = useState(false);
+  const [capturedImages, setCapturedImages] = useState<string[]>([]);
   const [faceBox, setFaceBox] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   // Load face-api models
   useEffect(() => {
     const loadModels = async () => {
+      if (modelsLoaded) return;
+      
       try {
         setIsModelLoading(true);
         await Promise.all([
@@ -85,6 +83,7 @@ const TakeAttendance = () => {
           faceapi.nets.faceRecognitionNet.loadFromUri('/models'),
           faceapi.nets.faceExpressionNet.loadFromUri('/models')
         ]);
+        setModelsLoaded(true);
         setIsModelLoading(false);
         console.log("Face recognition models loaded successfully!");
       } catch (error) {
@@ -93,7 +92,24 @@ const TakeAttendance = () => {
       }
     };
     loadModels();
-  }, []);
+  }, [modelsLoaded]);
+
+  // Cleanup models on component unmount
+  useEffect(() => {
+    return () => {
+      if (modelsLoaded) {
+        faceapi.env.monkeyPatch({
+          Canvas: HTMLCanvasElement,
+          Image: HTMLImageElement,
+          ImageData: ImageData,
+          Video: HTMLVideoElement,
+          createCanvasElement: () => document.createElement('canvas'),
+          createImageElement: () => document.createElement('img')
+        });
+      }
+      cleanupCamera();
+    };
+  }, [modelsLoaded]);
 
   // Fetch students' face features when subject is selected
   useEffect(() => {
@@ -126,7 +142,6 @@ const TakeAttendance = () => {
     fetchStudentFeatures();
   }, [selectedSubject]);
 
-  // Fetch subjects from Supabase
   const fetchSubjects = async () => {
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
@@ -138,7 +153,6 @@ const TakeAttendance = () => {
         console.log('No user found, skipping subject fetch');
         return;
       }
-      // Only fetch subjects that actually exist in the database
       const { data, error } = await supabase
         .from('subjects')
         .select('id, name')
@@ -150,7 +164,6 @@ const TakeAttendance = () => {
         throw new Error(error.message);
       }
       if (data) {
-        // Filter out any subjects with empty or null names just in case
         const filtered = data.filter(subject => subject.name && subject.name.trim() !== '');
         setSubjects(filtered);
       } else {
@@ -158,12 +171,10 @@ const TakeAttendance = () => {
       }
     } catch (error) {
       console.error('Error in fetchSubjects:', error);
-      // Don't show error toast for fetch errors to avoid spamming
       console.log('Failed to load subjects:', error);
     }
   };
 
-  // Load subjects on component mount
   useEffect(() => {
     fetchSubjects();
   }, []);
@@ -178,27 +189,12 @@ const TakeAttendance = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Update cleanupCamera to be more thorough
-  const cleanupCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => {
-        track.stop();
-        console.log('Camera track stopped:', track.label);
-      });
-      videoRef.current.srcObject = null;
-    }
-    setCameraActive(false);
-    setLastCapturedImage(null);
-    setIsCapturing(false);
-  };
-
-  // Update captureNow to include visual feedback
   const captureNow = async () => {
-    if (!videoRef.current || !canvasRef.current) return;
-    setIsCapturing(true); // Show rectangle immediately
-
+    if (!videoRef.current || !canvasRef.current || isProcessing) return;
+    
     try {
+      setIsProcessing(true);
+      
       // Draw current frame to canvas
       const canvas = canvasRef.current;
       const ctx = canvas.getContext('2d');
@@ -208,8 +204,9 @@ const TakeAttendance = () => {
       canvas.height = videoRef.current.videoHeight;
       ctx.drawImage(videoRef.current, 0, 0);
       
-      // Save last captured image for UI feedback
-      setLastCapturedImage(canvas.toDataURL('image/jpeg'));
+      // Save captured image for UI feedback
+      const imageData = canvas.toDataURL('image/jpeg');
+      setCapturedImages(prev => [...prev, imageData]);
       
       // Convert canvas to blob
       const blob = await new Promise<Blob>((resolve) => {
@@ -228,8 +225,11 @@ const TakeAttendance = () => {
       
       // Compare with each student's descriptors
       const alreadyRecognized = new Set(recognizedStudents.map(s => s.id));
+      let studentRecognized = false;
+
       for (const student of students) {
         if (alreadyRecognized.has(student.id)) continue;
+
         for (const storedDescriptor of student.face_descriptors) {
           const distance = euclideanDistance(extractedFeatures, storedDescriptor);
           if (distance < FACE_MATCH_THRESHOLD) {
@@ -241,29 +241,42 @@ const TakeAttendance = () => {
               }
               return prev;
             });
+            studentRecognized = true;
             break;
           }
         }
+        if (studentRecognized) break;
+      }
+
+      if (!studentRecognized) {
+        toast.warning("No matching student found in this capture");
       }
 
     } catch (error) {
       console.error('Recognition error:', error);
       toast.error('Failed to process image');
-      setLastCapturedImage(null);
     } finally {
-      setTimeout(() => {
-        setIsCapturing(false); // Hide rectangle after processing
-        setLastCapturedImage(null);
-      }, 1000);
+      setIsProcessing(false);
     }
   };
 
-  // Update stopCamera to use cleanupCamera
+  const cleanupCamera = () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(track => {
+        track.stop();
+        console.log('Camera track stopped:', track.label);
+      });
+      videoRef.current.srcObject = null;
+    }
+    setCameraActive(false);
+    setCapturedImages([]);
+  };
+
   const stopCamera = () => {
     cleanupCamera();
   };
 
-  // Update saveAttendance to use cleanupCamera
   const saveAttendance = async () => {
     if (recognizedStudents.length === 0) {
       toast.error("No students recognized yet");
@@ -279,7 +292,6 @@ const TakeAttendance = () => {
       const date = new Date().toISOString();
       const presentStudentIds = recognizedStudents.map(student => student.id);
 
-      // 1. Fetch all students (for the subject, or all students if not subject-specific)
       const { data: allStudents, error: studentsError } = await supabase
         .from('students')
         .select('id');
@@ -289,7 +301,6 @@ const TakeAttendance = () => {
         return;
       }
 
-      // 2. Prepare attendance rows
       const attendanceRows = allStudents.map(student => ({
         student_id: student.id,
         subject_id: subjectId,
@@ -298,7 +309,6 @@ const TakeAttendance = () => {
         status: presentStudentIds.includes(student.id) ? 'present' : 'absent',
       }));
 
-      // 3. Insert all rows at once
       const { error } = await supabase
         .from('attendance')
         .insert(attendanceRows);
@@ -308,7 +318,7 @@ const TakeAttendance = () => {
       } else {
         toast.success('Attendance saved successfully!');
         setRecognizedStudents([]);
-        cleanupCamera(); // Use cleanupCamera instead of setCameraActive
+        cleanupCamera();
         navigate('/');
       }
     } catch (error) {
@@ -317,27 +327,6 @@ const TakeAttendance = () => {
     }
   };
 
-  // Add cleanup on component unmount
-  useEffect(() => {
-    return () => {
-      cleanupCamera();
-    };
-  }, []);
-
-  // Add cleanup on navigation
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      cleanupCamera();
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      cleanupCamera();
-    };
-  }, []);
-
-  // Update startCamera to use cleanupCamera first
   const startCamera = async () => {
     if (!selectedSubject) {
       toast.error("Please select a subject first");
@@ -348,7 +337,6 @@ const TakeAttendance = () => {
       return;
     }
     try {
-      // Cleanup any existing camera session first
       cleanupCamera();
       
       const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -358,7 +346,6 @@ const TakeAttendance = () => {
         videoRef.current.srcObject = stream;
         setCameraActive(true);
         setRecognizedStudents([]);
-        setLastCapturedImage(null);
         toast.success("Camera started! Face recognition is active.");
       }
     } catch (error) {
@@ -375,7 +362,6 @@ const TakeAttendance = () => {
 
     setIsLoading(true);
     try {
-      // Get current user
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       
       if (userError) {
@@ -388,7 +374,6 @@ const TakeAttendance = () => {
         return;
       }
 
-      // Check if subject already exists
       const { data: existingSubject, error: checkError } = await supabase
         .from('subjects')
         .select('id')
@@ -405,7 +390,6 @@ const TakeAttendance = () => {
         return;
       }
 
-      // Insert new subject
       const { data: newSubjectData, error: insertError } = await supabase
         .from('subjects')
         .insert([
@@ -426,7 +410,6 @@ const TakeAttendance = () => {
         throw new Error('No data returned after insert');
       }
 
-      // Update local state with the new subject
       setSubjects(prev => [...prev, newSubjectData]);
       setNewSubject("");
       setShowAddSubject(false);
@@ -434,7 +417,6 @@ const TakeAttendance = () => {
       
     } catch (error) {
       console.error('Error adding subject:', error);
-      // Check if the error is a duplicate key error
       if (error instanceof Error && error.message.includes('duplicate key')) {
         toast.error("This subject already exists");
       } else {
@@ -604,11 +586,12 @@ const TakeAttendance = () => {
                     ref={videoRef}
                     autoPlay
                     playsInline
+                    muted
                     className={`w-full h-96 bg-gray-100 rounded-lg object-cover ${!cameraActive ? 'hidden' : ''}`}
                   />
                   <canvas
                     ref={canvasRef}
-                    className="absolute top-0 left-0 w-full h-96"
+                    className="hidden"
                   />
                   {cameraActive && (
                     <div className="absolute top-0 left-0 w-full h-96 flex items-center justify-center pointer-events-none">
@@ -618,19 +601,6 @@ const TakeAttendance = () => {
                         <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-green-500"></div>
                         <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-green-500"></div>
                       </div>
-                    </div>
-                  )}
-                  {cameraActive && lastCapturedImage && (
-                    <div className="absolute top-0 left-0 w-full h-96 rounded-lg overflow-hidden">
-                      <img
-                        src={lastCapturedImage}
-                        alt="Last captured"
-                        className="w-full h-full object-cover"
-                        style={{
-                          animation: 'fadeOut 1s forwards',
-                          opacity: 0.7
-                        }}
-                      />
                     </div>
                   )}
                   
@@ -693,14 +663,15 @@ const TakeAttendance = () => {
                       <Button 
                         onClick={captureNow}
                         className="flex-1 bg-blue-500 hover:bg-blue-600"
+                        disabled={isProcessing}
                       >
                         <CheckCircle className="w-4 h-4 mr-2" />
-                        Capture Now
+                        {isProcessing ? 'Processing...' : 'Capture Now'}
                       </Button>
                       <Button 
                         onClick={saveAttendance}
                         className="flex-1 bg-green-600 hover:bg-green-700"
-                        disabled={recognizedStudents.length === 0}
+                        disabled={recognizedStudents.length === 0 || isProcessing}
                       >
                         <CheckCircle className="w-4 h-4 mr-2" />
                         Save Attendance ({recognizedStudents.length})

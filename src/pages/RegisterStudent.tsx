@@ -154,9 +154,9 @@ const RegisterStudent = () => {
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      canvas.width = videoRef.current.videoWidth;
-      canvas.height = videoRef.current.videoHeight;
-      ctx.drawImage(videoRef.current, 0, 0);
+        canvas.width = videoRef.current.videoWidth;
+        canvas.height = videoRef.current.videoHeight;
+        ctx.drawImage(videoRef.current, 0, 0);
 
       // Detect faces and extract features
       const detections = await faceapi.detectAllFaces(
@@ -203,15 +203,15 @@ const RegisterStudent = () => {
 
       const imageData = canvas.toDataURL('image/jpeg');
       
-      setCapturedImages(prev => [...prev, imageData]);
+        setCapturedImages(prev => [...prev, imageData]);
       setFaceDescriptors(prev => [...prev, descriptorArray]);
       
       toast.success(`Image ${captureNumber} captured successfully!`);
-      
+        
       if (captureNumber >= 2) {
         console.log('Both captures completed. Face descriptors:', faceDescriptors);
         cleanupCamera();
-      }
+        }
     } catch (error) {
       console.error('Error capturing image:', error);
       toast.error('Failed to capture image');
@@ -230,7 +230,7 @@ const RegisterStudent = () => {
     }
 
     try {
-      setIsRegistering(true);
+    setIsRegistering(true);
       cleanupCamera();
 
       const { error } = await supabase
